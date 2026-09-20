@@ -1,10 +1,20 @@
-"""Windows-only process lock for local polling."""
+"""Cross-platform process lock for local polling."""
 
 from __future__ import annotations
 
-import msvcrt
+import sys
 from pathlib import Path
 from typing import BinaryIO
+
+if sys.platform == "win32":
+    import msvcrt
+else:
+    msvcrt = None
+
+try:
+    import fcntl
+except ImportError:
+    fcntl = None
 
 
 class AnotherInstanceRunningError(RuntimeError):
@@ -25,8 +35,11 @@ class SingleInstanceLock:
         lock_file = self._lock_path.open("r+b")
 
         try:
-            msvcrt.locking(lock_file.fileno(), msvcrt.LK_NBLCK, 1)
-        except OSError as error:
+            if msvcrt is not None:
+                msvcrt.locking(lock_file.fileno(), msvcrt.LK_NBLCK, 1)
+            elif fcntl is not None:
+                fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except (OSError, IOError) as error:
             lock_file.close()
             raise AnotherInstanceRunningError(
                 "Another ZanTender bot process is already running."
@@ -38,8 +51,12 @@ class SingleInstanceLock:
         if self._file is None:
             return
         try:
-            self._file.seek(0)
-            msvcrt.locking(self._file.fileno(), msvcrt.LK_UNLCK, 1)
+            if msvcrt is not None:
+                self._file.seek(0)
+                msvcrt.locking(self._file.fileno(), msvcrt.LK_UNLCK, 1)
+            elif fcntl is not None:
+                fcntl.flock(self._file.fileno(), fcntl.LOCK_UN)
         finally:
             self._file.close()
             self._file = None
+
